@@ -171,7 +171,6 @@ void cpu_max_pool_channels_last(
             Vec val_vec = Vec::loadu(in + d2);
             iVec maxindex_vec = iVec::loadu(index_buffer.get() + d2);
             Vec maxval_vec = Vec::loadu(out + d2);
-
             // true = all ones, false = all zeros
             Vec mask = (val_vec > maxval_vec) | val_vec.isnan();
             iVec imask = vec::cast<integer_t>(mask);
@@ -461,7 +460,7 @@ void max_pool2d_kernel_impl(
     int dilationW, int dilationH) {
   switch (input.suggest_memory_format()) {
     case at::MemoryFormat::Contiguous: {
-      AT_DISPATCH_FLOATING_TYPES_AND(ScalarType::BFloat16, input.scalar_type(), "max_pool2d", [&] {
+      AT_DISPATCH_ALL_TYPES_AND(ScalarType::BFloat16, input.scalar_type(), "max_pool2d", [&] {
         if (input.scalar_type() == ScalarType::BFloat16) {
           cpu_max_pool<BFloat16, /*accscalar_t*/float>(output, indices, input, kW, kH, dW, dH, padW, padH, dilationW, dilationH);
         } else {
@@ -471,7 +470,7 @@ void max_pool2d_kernel_impl(
       break;
     }
     case at::MemoryFormat::ChannelsLast: {
-      AT_DISPATCH_FLOATING_TYPES_AND(ScalarType::BFloat16, input.scalar_type(), "max_pool2d_channels_last", [&] {
+      AT_DISPATCH_ALL_TYPES_AND(ScalarType::BFloat16, input.scalar_type(), "max_pool2d_channels_last", [&] {
         cpu_max_pool_channels_last<scalar_t>(output, indices, input, kW, kH, dW, dH, padW, padH, dilationW, dilationH);
       });
       break;

@@ -11,6 +11,7 @@
 #include <ATen/native/quantized/cpu/qnnpack_utils.h>
 #include <c10/util/irange.h>
 #include <caffe2/utils/threadpool/pthreadpool-cpp.h>
+#include <c10/core/ScalarType.h>
 
 #include <algorithm>
 #include <vector>
@@ -401,6 +402,63 @@ Tensor quantized_max_pool2d(
   return qy;
 }
 
+// TODO: out here is not a quantized tensor. If there's structured support for quantized tensors, then I think it would have made out
+// a quantized tensor? This results in out.dtype() and sizes being undefined and incorrect, respectively.
+// The non-quantized variant of this function has the correct sizes. We have to implement the output shape computations in this function.
+std::tuple<at::Tensor &,at::Tensor &> max_pool2d_with_indices_out_quantized_cpu(const at::Tensor & self, at::IntArrayRef kernel_size, at::IntArrayRef stride, at::IntArrayRef padding, at::IntArrayRef dilation, bool ceil_mode, at::Tensor & out, at::Tensor & indices) {
+  const int kH = safe_downcast<int, int64_t>(kernel_size[0]);
+  const int kW = kernel_size.size() == 1 ? kH : safe_downcast<int, int64_t>(kernel_size[1]);
+  const int dH = stride.empty() ? kH : safe_downcast<int, int64_t>(stride[0]);
+  const int dW = stride.empty() ? kW :
+                 stride.size() == 1 ? dH : safe_downcast<int, int64_t>(stride[1]);
+
+  const int padH = safe_downcast<int, int64_t>(padding[0]);
+  const int padW = padding.size() == 1 ? padH : safe_downcast<int, int64_t>(padding[1]);
+
+  const int dilationH = safe_downcast<int, int64_t>(dilation[0]);
+  const int dilationW = dilation.size() == 1 ? dilationH : safe_downcast<int, int64_t>(dilation[1]);
+  int dimc = 0;
+  int dimh = 1;
+  int dimw = 2;
+  int nbatch = 1;
+  if (self.dim() == 4) { // Includes batches
+    ++dimc;
+    ++dimh;
+    ++dimw;
+  }
+  // Check if inputs are valid.
+  int64_t iC = self.size(dimc);
+  int64_t iH = self.size(dimh);
+  int64_t iW = self.size(dimw);
+  // Check output dimensions.
+  int64_t oC = iC;
+  int64_t oH = pooling_output_shape<int64_t>(iH, kH, padH, dH, dilationH, ceil_mode);
+  int64_t oW = pooling_output_shape<int64_t>(iW, kW, padW, dW, dilationW, ceil_mode);
+  TORCH_CHECK(oH > 0 && oW > 0,
+              "Given input size: (",
+              iC, "x", iH, "x", iW,
+              "). Calculated output size: (",
+              oC, "x", oH, "x", oW,
+              "). Output size is too small.");
+  std::vector<int64_t> oSizes;
+  if (self.dim() == 3) {
+    oSizes = {oC, oH, oW};
+  } else {
+    oSizes = {self.size(0), oC, oH, oW};
+  }
+  auto out_int_repr = at::empty(oSizes, at::device(at::kCPU).dtype(c10::toUnderlying(self.scalar_type())));
+  indices = at::empty(oSizes, indices.options()); // is the input indices options valid?
+  std::cout << self << std::endl;
+  std::cout << self.int_repr() << std::endl;
+  max_pool2d_kernel(kCPU, out_int_repr, indices, self.int_repr(), kW, kH, dW, dH, padW, padH, dilationW, dilationH);
+
+  // TODO: std::move the int_repr ptr into the q tensor instead of calling _make_per_tensor_quantized_tensor?
+  out = _make_per_tensor_quantized_tensor(out_int_repr, self.q_scale(), self.q_zero_point());
+
+  return std::tuple<at::Tensor &, at::Tensor &>(out, indices);
+}
+
+
 // Quantized max_pool1d is a special case of the max_pool2d, with one of the
 // dimensions and kernels removed.
 Tensor quantized_max_pool1d(
@@ -417,7 +475,7 @@ Tensor quantized_max_pool1d(
   if (stride.empty()) {
     stride = kernel_size;
   }
-  auto qy = at::quantized_max_pool2d(
+  auto qy = at::native::quantized_max_pool2d(
     qx.unsqueeze(kSqueezeDim),
     {1, kernel_size[0]},
     {1, stride[0]},
@@ -444,7 +502,7 @@ class QMaxPool_arr_args final {
       return at::quantized_max_pool1d(qx, kernel_size, stride, padding,
                                       dilation, ceil_mode);
     } else if (kSpatialDim == 2) {
-      return at::quantized_max_pool2d(qx, kernel_size, stride, padding,
+      return at::native::quantized_max_pool2d(qx, kernel_size, stride, padding,
                                       dilation, ceil_mode);
     }
     TORCH_CHECK(false, "MaxPool", kSpatialDim, "D is not supported.");
