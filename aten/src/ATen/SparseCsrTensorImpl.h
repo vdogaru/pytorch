@@ -28,6 +28,7 @@ struct TORCH_API SparseCsrTensorImpl : public TensorImpl {
   Tensor crow_indices_;
   Tensor col_indices_;
   Tensor values_;
+  bool is_transpose_;  // when true, the SparseCsrTensorImpl holds a CSC tensor
 
  public:
   explicit SparseCsrTensorImpl(at::DispatchKeySet, const caffe2::TypeMeta);
@@ -38,12 +39,22 @@ struct TORCH_API SparseCsrTensorImpl : public TensorImpl {
       const Tensor& crow_indices,
       const Tensor& col_indices,
       const Tensor& values,
-      IntArrayRef size);
+      IntArrayRef size,
+      bool is_transpose);
 
   const Tensor& crow_indices() const { return crow_indices_; }
   const Tensor& col_indices() const { return col_indices_; }
   const Tensor& values() const { return values_; }
   int nnz() { return values_.size(0); }
+  bool is_transpose() const { return is_transpose_; }
+
+  Layout layout_impl() const {
+    if (is_transpose_) {
+      return kSparseCsc;
+    } else {
+      return kSparseCsr;
+    }
+  }
 
   /**
    * Return a TensorImpl that is a shallow-copy of this TensorImpl.
@@ -89,7 +100,8 @@ struct TORCH_API SparseCsrTensorImpl : public TensorImpl {
       const caffe2::TypeMeta data_type,
       at::Tensor crow_indices,
       at::Tensor col_indices,
-      at::Tensor values);
+      at::Tensor values,
+      bool is_transpose);
 
   /**
    * Copy the tensor metadata fields (e.g. sizes / strides / storage pointer / storage_offset)
@@ -108,6 +120,7 @@ struct TORCH_API SparseCsrTensorImpl : public TensorImpl {
     dest_sparse_impl->crow_indices_ = src_sparse_impl->crow_indices();
     dest_sparse_impl->col_indices_ = src_sparse_impl->col_indices();
     dest_sparse_impl->values_ = src_sparse_impl->values();
+    dest_sparse_impl->is_transpose_ = src_sparse_impl->is_transpose();
   }
 };
 } // namespace at
